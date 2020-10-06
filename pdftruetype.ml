@@ -552,16 +552,11 @@ let to_type3 pdf font =
       ({Pdftext.fonttype = Pdftext.Truetype;
         Pdftext.encoding = original_encoding;
         Pdftext.fontdescriptor =
-          Some ({Pdftext.fontfile = Some Pdftext.FontFile2 fontfileobj} as fontdescriptor)} as fontrec) ->
+          Some ({Pdftext.fontfile = Some Pdftext.FontFile2 (data, _)} as fontdescriptor)} as fontrec) ->
             let glyphs, fontmatrix =
-              let str = Pdf.direct pdf (Pdf.Indirect fontfileobj) in
-                Pdfcodec.decode_pdfstream pdf str;
-                match str with
-                | Pdf.Stream {contents = (_, Pdf.Got data)} ->
-                    begin try parse_truetype_font data with
-                      e -> Printf.printf "Error %s" (Printexc.to_string e); raise (Pdf.PDFError "TrueType failure")
-                    end
-                | _ -> raise (Pdf.PDFError "Truetype data not a stream")
+            begin try parse_truetype_font data with
+              e -> Printf.printf "Error %s" (Printexc.to_string e); raise (Pdf.PDFError "TrueType failure")
+            end
             in
               let charprocs =
                 let scalematrix =

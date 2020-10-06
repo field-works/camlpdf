@@ -20,13 +20,19 @@ type simple_fonttype =
 
 type fontmetrics = float array (*r widths of glyphs 0..255 *)
 
-(* The fontfile is an indirect reference into the document, rather than a
-PDFobject itself. This preserves polymorphic equality (a pdfobject can contain
-functional values *)
+type fontfile_subtype =
+  | Type1C
+  | CIDFontType0C
+  | OpenType
+  | UnknownType of string
+
 type fontfile =
-  | FontFile of int
-  | FontFile2 of int
-  | FontFile3 of int
+  | FontFile of Pdfio.bytes * int * int * int
+    (* data, Length1, Length2, Length3 *)
+  | FontFile2 of Pdfio.bytes * int
+    (* data, Length1 *)
+  | FontFile3 of Pdfio.bytes * fontfile_subtype
+    (* data, Subtype *)
 
 type fontdescriptor =
   {ascent : float;
@@ -34,6 +40,10 @@ type fontdescriptor =
    leading : float;
    avgwidth : float;
    maxwidth : float;
+   flags : int;
+   italic_angle : float;
+   stem_v : float;
+   bbox : (float * float * float * float);
    fontfile : fontfile option}
 
 type differences = (string * int) list
@@ -91,21 +101,32 @@ type cid_system_info =
    ordering : string;
    supplement : int}
 
+type cid_font_subtype =
+  | CIDFontType0
+  | CIDFontType2
+  | CIDFontUnknown of string
+
 type composite_CIDfont =
-  {cid_system_info : cid_system_info;
+  {cid_font_subtype : cid_font_subtype;
+   cid_system_info : cid_system_info;
    cid_basefont : string;
    cid_fontdescriptor : fontdescriptor;
-   cid_widths : (int * float) list;
-   cid_default_width : int}
+   cid_widths : (int * int) list;
+   cid_default_width : int;
+   cid_widths2 : (int * (int * int * int)) list;
+   cid_default_width2 : (int * int) option;
+   cid_to_gid_map : (int * int) list}
 
 type cmap_encoding =
   | Predefined of string
   | CMap of int (* indirect reference to CMap stream *)
 
+type to_unicode = (int * (int list)) list
+
 type font =
   | StandardFont of standard_font * encoding
   | SimpleFont of simple_font
-  | CIDKeyedFont of string * composite_CIDfont * cmap_encoding (* string is top-level basefont *)
+  | CIDKeyedFont of string * composite_CIDfont * cmap_encoding * to_unicode (* string is top-level basefont *)
 
 (* For Debug *)
 let string_of_fonttype = function
@@ -138,7 +159,7 @@ let string_of_simple_font font =
 let string_of_font = function
   | StandardFont (s, _) -> "StandardFont " ^ string_of_standard_font s
   | SimpleFont s -> "SimpleFont " ^ string_of_simple_font s
-  | CIDKeyedFont (s, _, _) -> "CIDKeyedFont " ^ s
+  | CIDKeyedFont (s, _, _, _) -> "CIDKeyedFont " ^ s
 
 let read_type3_data pdf font =
   {fontbbox =
@@ -168,6 +189,58 @@ let read_basefont pdf font =
   | Some (Pdf.Name n) -> n
   | _ -> ""
 
+let rec read_fontfile_data pdf fontfile =
+  match fontfile with
+  | Pdf.Stream {contents = (_, Pdf.Got data)} ->
+      Pdfcodec.decode_pdfstream pdf fontfile;
+      begin match fontfile with
+      | Pdf.Stream {contents = (_, Pdf.Got data)} ->
+          data
+      | _ -> raise (Assert_failure ("", 0, 0))
+      end
+  | Pdf.Stream {contents = (_, Pdf.ToGet _)} ->
+      Pdf.getstream fontfile;
+      read_fontfile_data pdf fontfile
+  | e -> raise (Pdf.PDFError "Bad /FontFileX")
+
+let read_fontfile pdf stream =
+  let length1 =
+    match Pdf.lookup_direct pdf "/Length1" stream with
+    | Some (Pdf.Integer i) -> i
+    | _ -> raise (Pdf.PDFError "malformed or missing /Length1")
+  and length2 =
+    match Pdf.lookup_direct pdf "/Length2" stream with
+    | Some (Pdf.Integer i) -> i
+    | _ -> raise (Pdf.PDFError "malformed or missing /Length2")
+  and length3 =
+    match Pdf.lookup_direct pdf "/Length2" stream with
+    | Some (Pdf.Integer i) -> i
+    | _ -> raise (Pdf.PDFError "malformed or missing /Length3")
+  in
+  let data = read_fontfile_data pdf stream in
+  FontFile (data, length1, length2, length3)
+
+let read_fontfile2 pdf stream =
+  let length1 =
+    match Pdf.lookup_direct pdf "/Length1" stream with
+    | Some (Pdf.Integer i) -> i
+    | _ -> raise (Pdf.PDFError "malformed or missing /Length1")
+  in
+  let data = read_fontfile_data pdf stream in
+  FontFile2 (data, length1)
+
+let read_fontfile3 pdf stream =
+  let subtype =
+    match Pdf.lookup_direct pdf "/Subtype" stream with
+    | Some (Pdf.Name "Type1C") -> Type1C
+    | Some (Pdf.Name "CIDFontType0C") -> CIDFontType0C
+    | Some (Pdf.Name "OpenType") -> OpenType
+    | Some (Pdf.Name s) -> UnknownType s
+    | _ -> raise (Pdf.PDFError "malformed or missing /Subtype")
+  in
+  let data = read_fontfile_data pdf stream in
+  FontFile3 (data, subtype)
+
 let read_fontdescriptor pdf font =
   match Pdf.lookup_direct pdf "/FontDescriptor" font with
   | None -> None
@@ -192,15 +265,31 @@ let read_fontdescriptor pdf font =
         match Pdf.lookup_direct pdf "/MaxWidth" fontdescriptor with
         | Some x -> Pdf.getnum x
         | None -> 0.
+      in let bbox =
+        match Pdf.lookup_direct pdf "/FontBBox" fontdescriptor with
+        | Some x -> Pdf.parse_rectangle x
+        | None -> (0., 0., 0., 0.)
+      in let flags =
+        match Pdf.lookup_direct pdf "/Flags" fontdescriptor with
+        | Some (Pdf.Integer i) -> i
+        | _ -> 32
+      in let italic_angle =
+        match Pdf.lookup_direct pdf "/ItalicAngle" fontdescriptor with
+        | Some x -> Pdf.getnum x
+        | None -> 0.
+      in let stem_v =
+        match Pdf.lookup_direct pdf "/StemV" fontdescriptor with
+        | Some x -> Pdf.getnum x
+        | None -> 0.
       in let fontfile =
-        match Pdf.find_indirect "/FontFile" fontdescriptor with
-        | Some i -> Some (FontFile i)
+        match Pdf.lookup_direct pdf "/FontFile" fontdescriptor with
+        | Some x -> Some (read_fontfile pdf x)
         | None ->
-            match Pdf.find_indirect "/FontFile2" fontdescriptor with
-            | Some i -> Some (FontFile2 i)
+            match Pdf.lookup_direct pdf "/FontFile2" fontdescriptor with
+            | Some x -> Some (read_fontfile2 pdf x)
             | None ->
-                match Pdf.find_indirect "/FontFile3" fontdescriptor with
-                | Some i -> Some (FontFile3 i)
+                match Pdf.lookup_direct pdf "/FontFile3" fontdescriptor with
+                | Some x -> Some (read_fontfile3 pdf x)
                 | None -> None
       in
         Some
@@ -209,6 +298,10 @@ let read_fontdescriptor pdf font =
            leading = leading;
            avgwidth = avgwidth;
            maxwidth = maxwidth;
+           bbox = bbox;
+           flags = flags;
+           italic_angle = italic_angle;
+           stem_v = stem_v;
            fontfile = fontfile}
 
 (* Read the widths from a font. Normally in the font descriptor, but in Type3
@@ -450,8 +543,8 @@ let rec read_cid_widths = function
       let nums =
         map
           (function
-           | Pdf.Integer i -> float i
-           | Pdf.Real r -> r
+           | Pdf.Integer i -> i
+           | Pdf.Real r -> int_of_float r
            | _ -> raise (Pdf.PDFError "Bad /W array"))
         ws
       in
@@ -459,8 +552,8 @@ let rec read_cid_widths = function
   | Pdf.Integer c_first::Pdf.Integer c_last::w::more ->
       let w =
         match w with
-        | Pdf.Integer i -> float i
-        | Pdf.Real r -> r
+        | Pdf.Integer i -> i
+        | Pdf.Real r -> int_of_float r
         | _ -> raise (Pdf.PDFError "Bad /W array")
       in
         if c_last < c_first
@@ -475,10 +568,64 @@ let rec read_cid_widths = function
   | [] -> []
   | _ -> raise (Pdf.PDFError "Malformed /W in CIDfont")
 
+let rec read_cid_widths2 = function
+  | Pdf.Integer c::Pdf.Array ws::more ->
+      let rec split3 = function
+        | [] -> []
+        | a::b::c::more -> (a, b, c) :: split3 more
+        | _ -> raise (Pdf.PDFError "Bad /W2 array")
+      in
+      let nums =
+        split3 (map
+          (function
+           | Pdf.Integer i -> i
+           | Pdf.Real r -> int_of_float r
+           | _ -> raise (Pdf.PDFError "Bad /W2 array"))
+        ws)
+      in
+      combine (indxn c nums) nums @ read_cid_widths2 more
+  | Pdf.Integer c_first::Pdf.Integer c_last::w::vx::vy::more ->
+      let w =
+        match w with
+        | Pdf.Integer i -> i
+        | Pdf.Real r -> int_of_float r
+        | _ -> raise (Pdf.PDFError "Bad /W2 array")
+      and vx =
+        match vx with
+        | Pdf.Integer i -> i
+        | Pdf.Real r -> int_of_float r
+        | _ -> raise (Pdf.PDFError "Bad /W2 array")
+      and vy =
+        match vy with
+        | Pdf.Integer i -> i
+        | Pdf.Real r -> int_of_float r
+        | _ -> raise (Pdf.PDFError "Bad /W2 array")
+      in
+        if c_last = c_first then
+          (c_first, (w, vx, vy)) :: read_cid_widths2 more
+        else 
+          if c_last < c_first
+            then raise (Pdf.PDFError "Bad /W2 array")
+          else
+            let pairs =
+              combine
+                (ilist c_first c_last)
+                (many (w, vx, vy) (c_last - c_first + 1))
+            in
+              pairs @ read_cid_widths2 more
+  | [] -> []
+  | _ -> raise (Pdf.PDFError "Malformed /W2 in CIDfont")
+
 (* Read a composite CID font *)
 (* FIXME: Doesn't support vertical modes (DW2 / W2) *)
 let read_descendant pdf dict =
-  let cid_system_info =
+  let cid_font_subtype =
+    match Pdf.lookup_direct pdf "/Subtype" dict with
+    | Some (Pdf.Name "/CIDFontType0") -> CIDFontType0
+    | Some (Pdf.Name "/CIDFontType2") -> CIDFontType2
+    | Some (Pdf.Name n) -> CIDFontUnknown n
+    | _ -> raise (Pdf.PDFError "No Subtype")
+  in let cid_system_info =
     match Pdf.lookup_direct pdf "/CIDSystemInfo" dict with
     | Some cid_dict -> read_cid_system_info pdf cid_dict
     | None -> raise (Pdf.PDFError "No CIDSystemInfo")
@@ -494,95 +641,29 @@ let read_descendant pdf dict =
     match Pdf.lookup_direct pdf "/W" dict with
     | Some (Pdf.Array ws) -> read_cid_widths ws
     | _ -> []
+  in let cid_widths2 =
+    match Pdf.lookup_direct pdf "/W2" dict with
+    | Some (Pdf.Array ws) -> read_cid_widths2 ws
+    | _ -> []
   in let default_width =
     match Pdf.lookup_direct pdf "/DW" dict with
     | Some (Pdf.Integer d) -> d
     | _ -> 1000
+  in let default_width2 =
+    (* 20120820: Integer -> Array *)
+    match Pdf.lookup_direct pdf "/DW2" dict with
+    | Some (Pdf.Array [Pdf.Integer vy; Pdf.Integer wy]) -> Some (vy, wy)
+    | _ -> None
   in
-    {cid_system_info = cid_system_info;
+    {cid_font_subtype = cid_font_subtype;
+     cid_system_info = cid_system_info;
      cid_basefont = cid_basefont;
      cid_fontdescriptor = cid_fontdescriptor;
      cid_widths = cid_widths;
-     cid_default_width = default_width}
-
-(* Read a CIDKeyed (Type 0) font *)
-let read_cidkeyed_font pdf font =
-  let basefont =
-    match Pdf.lookup_direct pdf "/BaseFont" font with
-    | Some (Pdf.Name b) -> b
-    | _ -> raise (Pdf.PDFError "Bad /BaseFont")
-  in let composite_CIDfont =
-    match Pdf.lookup_direct pdf "/DescendantFonts" font with
-    | Some (Pdf.Array [e]) ->
-        read_descendant pdf (Pdf.direct pdf e)
-    | _ -> raise (Pdf.PDFError "Bad descendant font")
-  in let encoding =
-    match Pdf.lookup_direct pdf "/Encoding" font with
-    | Some (Pdf.Name e) -> Predefined e
-    | Some (Pdf.Stream _) ->
-        begin match Pdf.find_indirect "/Encoding" font with
-        | Some n -> CMap n
-        | None -> raise (Pdf.PDFError "malformed /Encoding")
-        end
-    | _ -> raise (Pdf.PDFError "malformed or missing /Encoding")
-  in
-    CIDKeyedFont (basefont, composite_CIDfont, encoding)
-
-(* Reads a font *)
-let read_font pdf fontdict =
-  if is_standard14font pdf fontdict
-    then read_standard14font pdf fontdict
-    else if is_simple_font pdf fontdict
-      then read_simple_font pdf fontdict
-      else if is_cidkeyed_font pdf fontdict
-        then read_cidkeyed_font pdf fontdict
-        else raise (Pdf.PDFError "Unknown font type")
-
-(* Write a font. Currently only works for our own special Type 3 fonts
-generated by the Pdfcff module, but eventually, when we support font embedding,
-it'll work for lots of kinds. *)
-let write_encoding pdf = function
-  | CustomEncoding (ImplicitInFontFile, diffs) ->
-      let diffarray =
-        Pdf.Array
-          (flatten (map (function (name, number) -> [Pdf.Integer number; Pdf.Name name]) diffs))
-      in
-        let encodingdict =
-          Pdf.Dictionary
-            [("/Type", Pdf.Name "/Encoding");
-             ("/Differences", diffarray)]
-        in
-          Pdf.addobj pdf encodingdict
-  | _ -> raise (Pdf.PDFError "write_encoding: not supported")
- 
-let write_font pdf = function
-  | SimpleFont
-      {fonttype = Type3
-         {fontbbox = fontbbox;
-          fontmatrix = fontmatrix;
-          charprocs = charprocs};
-       encoding = encoding;
-       fontdescriptor = Some fontdescriptor} ->
-        let encoding_entry =
-          match encoding with
-          | ImplicitInFontFile -> []
-          | _ -> [("/Encoding", Pdf.Indirect (write_encoding pdf encoding))]
-        in
-          let dict =
-            Pdf.Dictionary
-              ([("/Type", Pdf.Name "/Font");
-               ("/Subtype", Pdf.Name "/Type3");
-               ("/FontBBox", Pdf.Array [Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.]);
-               ("/FontMatrix", Pdf.Array [Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.]);
-               ("/CharProcs", Pdf.Dictionary (map (fun (s, _) -> (s, Pdf.Null)) charprocs));
-               ("/FirstChar", Pdf.Integer 0);
-               ("/LastChar", Pdf.Integer 0);
-               ("/Widths", Pdf.Array [Pdf.Real 0.])] @ encoding_entry)
-          in
-            Pdf.addobj pdf dict
-  | _ -> raise (Pdf.PDFError "write_font only supports type 3 fonts")
-
-(* \section{Font encodings} *)
+     cid_default_width = default_width;
+     cid_widths2 = cid_widths2;
+     cid_default_width2 = default_width2;
+     cid_to_gid_map = []}
 
 (* Parse a /ToUnicode CMap to extract font mapping. *)
 type section =
@@ -806,6 +887,91 @@ let rec codepoints_of_utf16be_inner prev = function
 let codepoints_of_utf16be str =
   codepoints_of_utf16be_inner [] (map int_of_char (explode str))
 
+(* Read a CIDKeyed (Type 0) font *)
+let read_cidkeyed_font pdf font =
+  let basefont =
+    match Pdf.lookup_direct pdf "/BaseFont" font with
+    | Some (Pdf.Name b) -> b
+    | _ -> raise (Pdf.PDFError "Bad /BaseFont")
+  in let composite_CIDfont =
+    match Pdf.lookup_direct pdf "/DescendantFonts" font with
+    | Some (Pdf.Array [e]) ->
+        read_descendant pdf (Pdf.direct pdf e)
+    | _ -> raise (Pdf.PDFError "Bad descendant font")
+  in let encoding =
+    match Pdf.lookup_direct pdf "/Encoding" font with
+    | Some (Pdf.Name e) -> Predefined e
+    | Some (Pdf.Stream _) ->
+        begin match Pdf.find_indirect "/Encoding" font with
+        | Some n -> CMap n
+        | None -> raise (Pdf.PDFError "malformed /Encoding")
+        end
+    | _ -> raise (Pdf.PDFError "malformed or missing /Encoding")
+  in let toUnicode =
+    match Pdf.lookup_direct pdf "/ToUnicode" font with
+    | Some tounicode ->
+        List.map (fun (cid, s) ->
+          (cid, codepoints_of_utf16be s)) (parse_tounicode pdf tounicode)
+    | None -> []
+  in
+  CIDKeyedFont (basefont, composite_CIDfont, encoding, toUnicode)
+
+(* Reads a font *)
+let read_font pdf fontdict =
+  if is_standard14font pdf fontdict
+    then read_standard14font pdf fontdict
+    else if is_simple_font pdf fontdict
+      then read_simple_font pdf fontdict
+      else if is_cidkeyed_font pdf fontdict
+        then read_cidkeyed_font pdf fontdict
+        else raise (Pdf.PDFError "Unknown font type")
+
+(* Write a font. Currently only works for our own special Type 3 fonts
+generated by the Pdfcff module, but eventually, when we support font embedding,
+it'll work for lots of kinds. *)
+let write_encoding pdf = function
+  | CustomEncoding (ImplicitInFontFile, diffs) ->
+      let diffarray =
+        Pdf.Array
+          (flatten (map (function (name, number) -> [Pdf.Integer number; Pdf.Name name]) diffs))
+      in
+        let encodingdict =
+          Pdf.Dictionary
+            [("/Type", Pdf.Name "/Encoding");
+             ("/Differences", diffarray)]
+        in
+          Pdf.addobj pdf encodingdict
+  | _ -> raise (Pdf.PDFError "write_encoding: not supported")
+ 
+let write_font pdf = function
+  | SimpleFont
+      {fonttype = Type3
+         {fontbbox = fontbbox;
+          fontmatrix = fontmatrix;
+          charprocs = charprocs};
+       encoding = encoding;
+       fontdescriptor = Some fontdescriptor} ->
+        let encoding_entry =
+          match encoding with
+          | ImplicitInFontFile -> []
+          | _ -> [("/Encoding", Pdf.Indirect (write_encoding pdf encoding))]
+        in
+          let dict =
+            Pdf.Dictionary
+              ([("/Type", Pdf.Name "/Font");
+               ("/Subtype", Pdf.Name "/Type3");
+               ("/FontBBox", Pdf.Array [Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.]);
+               ("/FontMatrix", Pdf.Array [Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.; Pdf.Real 0.]);
+               ("/CharProcs", Pdf.Dictionary (map (fun (s, _) -> (s, Pdf.Null)) charprocs));
+               ("/FirstChar", Pdf.Integer 0);
+               ("/LastChar", Pdf.Integer 0);
+               ("/Widths", Pdf.Array [Pdf.Real 0.])] @ encoding_entry)
+          in
+            Pdf.addobj pdf dict
+  | _ -> raise (Pdf.PDFError "write_font only supports type 3 fonts")
+
+(* \section{Font encodings} *)
+
 (* Build a hashtable for lookups based on an encoding *)
 let rec add_encoding addvals = function
   | ImplicitInFontFile -> ()
@@ -889,7 +1055,7 @@ let text_extractor_of_font pdf font =
 
 (* For now, the only composite font encoding scheme we understand is /Identity-H *)
 let is_identity_h = function
-  | CIDKeyedFont (_, _, Predefined "/Identity-H") -> true
+  | CIDKeyedFont (_, _, Predefined "/Identity-H", _) -> true
   | _ -> false
 
 let glyphnames_and_codepoints_of_text extractor text =

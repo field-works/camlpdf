@@ -10,13 +10,14 @@ let widths_of_cidwidths l default =
     arr
 
 let to_type3 pdf = function
-    Pdftext.CIDKeyedFont (basefont, cidfont, Pdftext.Predefined "/Identity-H") ->
+    Pdftext.CIDKeyedFont (basefont, cidfont, Pdftext.Predefined "/Identity-H", _) ->
       let font =
+        let widths = map (fun (id,w) -> (id, float_of_int w)) cidfont.Pdftext.cid_widths in
         Pdftext.SimpleFont
           {Pdftext.fonttype = Pdftext.Type1;
            Pdftext.basefont = basefont;
            Pdftext.fontmetrics =
-             Some (widths_of_cidwidths cidfont.Pdftext.cid_widths cidfont.Pdftext.cid_default_width);
+             Some (widths_of_cidwidths widths cidfont.Pdftext.cid_default_width);
            Pdftext.fontdescriptor = Some cidfont.Pdftext.cid_fontdescriptor;
            Pdftext.encoding = Pdftext.ImplicitInFontFile}
       in

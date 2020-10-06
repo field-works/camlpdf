@@ -1298,18 +1298,13 @@ let to_type3 pdf = function
       ({Pdftext.fonttype = Pdftext.Type1;
         Pdftext.encoding = original_encoding;
         Pdftext.fontdescriptor =
-          Some ({Pdftext.fontfile = Some Pdftext.FontFile3 fontfileobj} as fontdescriptor)} as fontrec) ->
+          Some ({Pdftext.fontfile = Some Pdftext.FontFile3 (data, _)} as fontdescriptor)} as fontrec) ->
         begin try
           flprint "***inside Pdfcff.to_type3\n";
           let parsed_cffdata, differences, fontmatrix =
-            let str = Pdf.direct pdf (Pdf.Indirect fontfileobj) in
-              Pdfcodec.decode_pdfstream pdf str;
-              match str with
-              | Pdf.Stream {contents = (_, Pdf.Got data)} ->
-                  begin try parse_cff_font data with
-                    e -> Printf.printf "Error %s" (Printexc.to_string e); raise (Pdf.PDFError "CFF Parse failure")
-                  end
-              | _ -> raise (Pdf.PDFError "CFF data not a stream")
+          begin try parse_cff_font data with
+            e -> Printf.printf "Error %s" (Printexc.to_string e); raise (Pdf.PDFError "CFF Parse failure")
+          end
           in
             Printf.printf "parsed_cffdata returned %i things\n" (length parsed_cffdata);
             let fontdescriptor = fontdescriptor

@@ -16,10 +16,19 @@ type simple_fonttype =
 
 type fontmetrics = float array
 
+type fontfile_subtype =
+  | Type1C
+  | CIDFontType0C
+  | OpenType
+  | UnknownType of string
+
 type fontfile =
-  | FontFile of int
-  | FontFile2 of int
-  | FontFile3 of int
+  | FontFile of Pdfio.bytes * int * int * int
+    (* data, Length1, Length2, Length3 *)
+  | FontFile2 of Pdfio.bytes * int
+    (* data, Length1 *)
+  | FontFile3 of Pdfio.bytes * fontfile_subtype
+    (* data, Subtype *)
 
 type fontdescriptor =
   {ascent : float;
@@ -27,6 +36,10 @@ type fontdescriptor =
    leading : float;
    avgwidth : float;
    maxwidth : float;
+   flags : int;
+   italic_angle : float;
+   stem_v : float;
+   bbox : (float * float * float * float);
    fontfile : fontfile option}
 
 type differences = (string * int) list
@@ -68,21 +81,32 @@ type cid_system_info =
    ordering : string;
    supplement : int}
 
+type cid_font_subtype =
+  | CIDFontType0
+  | CIDFontType2
+  | CIDFontUnknown of string
+
 type composite_CIDfont =
-  {cid_system_info : cid_system_info;
+  {cid_font_subtype : cid_font_subtype;
+   cid_system_info : cid_system_info;
    cid_basefont : string;
    cid_fontdescriptor : fontdescriptor;
-   cid_widths : (int * float) list;
-   cid_default_width : int}
+   cid_widths : (int * int) list;
+   cid_default_width : int;
+   cid_widths2 : (int * (int * int * int)) list;
+   cid_default_width2 : (int * int) option;
+   cid_to_gid_map : (int * int) list}
   
 type cmap_encoding =
   | Predefined of string
   | CMap of int (* indirect reference to CMap stream *)
 
+type to_unicode = (int * (int list)) list
+
 type font =
   | StandardFont of standard_font * encoding
   | SimpleFont of simple_font
-  | CIDKeyedFont of string * composite_CIDfont * cmap_encoding
+  | CIDKeyedFont of string * composite_CIDfont * cmap_encoding * to_unicode
 
 (** {2 String representations of fonts } *)
 
