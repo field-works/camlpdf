@@ -36,6 +36,7 @@ type fontdescriptor =
    leading : float;
    avgwidth : float;
    maxwidth : float;
+   capheight : float;
    flags : int;
    italic_angle : float;
    stem_v : float;

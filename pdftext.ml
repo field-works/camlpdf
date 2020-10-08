@@ -40,6 +40,7 @@ type fontdescriptor =
    leading : float;
    avgwidth : float;
    maxwidth : float;
+   capheight : float;
    flags : int;
    italic_angle : float;
    stem_v : float;
@@ -265,6 +266,10 @@ let read_fontdescriptor pdf font =
         match Pdf.lookup_direct pdf "/MaxWidth" fontdescriptor with
         | Some x -> Pdf.getnum x
         | None -> 0.
+      in let capheight =
+        match Pdf.lookup_direct pdf "/CapHeight" fontdescriptor with
+        | Some x -> Pdf.getnum x
+        | None -> 0.
       in let bbox =
         match Pdf.lookup_direct pdf "/FontBBox" fontdescriptor with
         | Some x -> Pdf.parse_rectangle x
@@ -298,6 +303,7 @@ let read_fontdescriptor pdf font =
            leading = leading;
            avgwidth = avgwidth;
            maxwidth = maxwidth;
+           capheight = capheight;
            bbox = bbox;
            flags = flags;
            italic_angle = italic_angle;
