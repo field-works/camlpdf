@@ -62,6 +62,9 @@ val pdf_to_file_options :
 (** Simple write to given file name. Equivalent to [pdf_to_file_options false None true] *)
 val pdf_to_file : Pdf.t -> string -> unit
 
+(** Write a PDF object to an [Pdfio.output] *)
+val object_to_output: Pdfio.output -> int * Pdf.pdfobject -> unit
+
 (** {2 String of a PDF object} *)
 
 (** Calculate a string of a pdf object. Due to OCaml's modest limit

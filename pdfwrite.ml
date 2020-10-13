@@ -224,7 +224,7 @@ let debug_whole_pdf pdf =
 (* Calculate strings, one for each indirect object in the body. *)
 let strings_of_object (n, pdfobject) =
   let strings = ref [] in
-  strings := [WString (string_of_int n); WString " 0 obj\n"];
+  strings := [WString " 0 obj\n"; WString (string_of_int n)];
   strings_of_pdf
     (function x -> strings := x::!strings)
     (Hashtbl.create 0)
@@ -771,3 +771,11 @@ let pdf_to_file pdf f =
   pdf_to_file_options
     ~preserve_objstm:true ~generate_objstm:false ~compress_objstm:true
     false None true pdf f
+
+let object_to_output o (n, pdfobject) =
+  let write = function
+    | WString s -> o.output_string s
+    | WStream data -> output_stream o (Pdf.Stream {contents = Pdf.Null, data})
+  in
+  let strings = strings_of_object (n, pdfobject) in
+  List.iter write strings
