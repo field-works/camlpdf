@@ -35,4 +35,6 @@ clean ::
 
 install : libinstall
 
+uninstall : libuninstall
+
 -include OCamlMakefile
