@@ -18,6 +18,7 @@ type pdfobject =
   | Integer of int
   | Real of float
   | String of string
+  | HexString of Pdfio.caml_bytes
   | Name of string
   | Array of pdfobject list
   | Dictionary of (string * pdfobject) list

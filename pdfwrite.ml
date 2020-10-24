@@ -104,6 +104,16 @@ let make_pdf_name_inner b s =
       Buffer.add_char b h
   done
 
+let make_pdf_hexstring s =
+  Buffer.clear b;
+  Buffer.add_char b '<';
+  Bytes.iter
+    (fun ch ->
+      Buffer.add_char b (hexchar ((int_of_char ch) / 16));
+      Buffer.add_char b (hexchar ((int_of_char ch) mod 16))) s;
+  Buffer.add_char b '>';
+  Buffer.contents b
+
 (* See if a name needs altering by [make_pdf_name_inner]. We ignore the first
 character, since a '/' is a delimter, and this is fine... *)
 let rec needs_processing_inner s p l =
@@ -171,6 +181,7 @@ and strings_of_pdf f changetable = function
   | Pdf.Integer n ->  f (WString (string_of_int n))
   | Pdf.Real r -> f (WString (format_real r))
   | Pdf.String s -> f (WString (make_pdf_string s))
+  | Pdf.HexString s -> f (WString (make_pdf_hexstring s))
   | Pdf.Name n -> f (WString (make_pdf_name n))
   | Pdf.Array elts ->
       f (WString "[");
