@@ -1886,3 +1886,15 @@ let permissions pdf =
   else
     []
 
+let read_startxref i =
+  (* Move to the first xref section. *)
+  find_eof i;
+  backline i;
+  (* Drop any initial contents which is not a digit - may occur if there is
+  legitimate whitespace of if the PDF is malformed such that it has the
+  startxref keyword and the byte offset on the same line. *)
+  match takewhile isdigit (getuntil_white_or_delimiter i) with
+  | [] ->
+      raise (Pdf.PDFError (Pdf.input_pdferror i "Could not find xref pointer"))
+  | xrefchars ->
+      int_of_string (implode xrefchars);
