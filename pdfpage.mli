@@ -44,6 +44,7 @@ document. The resultant document and the number of the new page root object are
 returned. If the document already contains a page root, it is overwritten but is
 not garbage collected. *)
 val add_pagetree : t list -> Pdf.t -> Pdf.t * int
+val add_pagetree_given_num : (unit -> int) -> (int * t) list -> Pdf.t -> Pdf.t * int
 
 (** Given the page root number (for instance that returned by [add_pagetree]),
 any specific extra dictionary entries and a PDF document, build a document root.

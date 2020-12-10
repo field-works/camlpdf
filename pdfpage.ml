@@ -361,8 +361,8 @@ be non-null.
 Leaves and branches also hold a parent pointer, and the object number of that
 leaf or branch. *) 
 type ptree =
-  | Lf of t list * int * int
-  | Br of t list * ptree * ptree * int * int
+  | Lf of (int * t) list * int * int
+  | Br of (int * t) list * ptree * ptree * int * int
 
 (* Split a list into three parts, the middle being of fixed, given, length n,
 and the left and right roughly equal in size, but at least of length one. *)
@@ -416,7 +416,7 @@ let rec pagetree_with_objnumbers toplevel old_pagetree_root_num objnumsource obj
         OBr (this, left_tree, right_tree, parent, this_num)
 
 (* Make a page. Returns, objectnumber, page pdfobject, extra objects to be added. *)
-let mkpage getobjnum parent page =
+let mkpage getobjnum parent (n, page) =
   (*Printf.printf "mkpage with parent %i\n" parent;*)
   let content, extras =
     match page.content with
@@ -446,7 +446,7 @@ let mkpage getobjnum parent page =
       @ 
         content)
     in
-      getobjnum (), page, extras
+      n, page, extras
 
 (* Build a list of objnum, pdfobject pairs from the ptree. The pages in the
 ptree are just missing their parent entries, so we add those. *)
@@ -545,20 +545,24 @@ let add_pagetree_flat pages pdf =
 (* Take a list of pages and a PDF. Build a page tree in the PDF, returning
 the new pdf and the object number assigned to the top page node. All references
 to objects not forming part of the tree nodes themselves are left unchanged. *)
-let add_pagetree pages pdf =
+let add_pagetree_given_num getobjnum pages pdf =
   if !flat_pagetrees then add_pagetree_flat pages pdf else
     let extras = ref [] in
-      let getobjnum = source pdf.Pdf.objects.Pdf.maxobjnum in
-        let ptree = pagetree getobjnum pages 0 in
-          let objects = objects_of_ptree getobjnum extras ptree in
-            let topnode = match hd objects with (n, _) -> n in
-              (*Printf.printf "There were %i objects_of_ptree\n" (List.length objects);
-              List.iter (fun (i, x) -> Printf.printf "%i: %s\n" i (Pdfwrite.string_of_pdf x)) objects;
-              Printf.printf "There were %i extras\n" (List.length !extras);
-              List.iter (fun (i, x) -> Printf.printf "%i: %s\n" i
-              (Pdfwrite.string_of_pdf x)) !extras;*)
-              iter (fun x -> ignore (Pdf.addobj_given_num pdf x)) (objects @ !extras);
-              pdf, topnode
+    let ptree = pagetree getobjnum pages 0 in
+    let objects = objects_of_ptree getobjnum extras ptree in
+    let topnode = match hd objects with (n, _) -> n in
+      (*Printf.printf "There were %i objects_of_ptree\n" (List.length objects);
+      List.iter (fun (i, x) -> Printf.printf "%i: %s\n" i (Pdfwrite.string_of_pdf x)) objects;
+      Printf.printf "There were %i extras\n" (List.length !extras);
+      List.iter (fun (i, x) -> Printf.printf "%i: %s\n" i
+      (Pdfwrite.string_of_pdf x)) !extras;*)
+      iter (fun x -> ignore (Pdf.addobj_given_num pdf x)) (objects @ !extras);
+      pdf, topnode
+
+let add_pagetree pages pdf =
+  let getobjnum = source pdf.Pdf.objects.Pdf.maxobjnum in
+  let pages = map (fun page -> (getobjnum (), page)) pages in
+  add_pagetree_given_num getobjnum pages pdf
 
 (* Add a root entry, replacing the Type and Pages entry, and any entries in
 extras. Preserves any entries in any existing root (e.g Metadata pointer). *)
